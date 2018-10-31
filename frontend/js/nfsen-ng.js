@@ -34,13 +34,18 @@ $(document).ready(function() {
             init();
 
             if (config.daemon_running === true) {
-                display_message('info', 'Daemon is running, graph is reloading each minute.');
+
+                var reload_seconds = 60;
+                if (typeof config.frontend.reload_interval !== 'undefined') reload_seconds = config.frontend.reload_interval;
+
+                display_message('info', 'Daemon is running, graph is reloading each ' + ((reload_seconds === 60) ? 'minute' : reload_seconds + ' seconds') + '.');
+
                 date_range_interval = setInterval(function() {
                     if (date_range.options.max === date_range.options.to) {
                         var now = new Date();
                         date_range.update({ max: now.getTime(), to: now.getTime() });
                     }
-                }, 60000);
+                }, reload_seconds*1000);
             }
         } else {
             display_message('danger', 'Error getting the config!')
@@ -197,15 +202,21 @@ $(document).ready(function() {
      * reload the graph when the protocol selection changes
      */
     $(document).on('change', '#filterProtocols input', function() {
+        var $filter = $('#filterProtocols');
         if ($(this).val() === 'any') {
             // uncheck all other input elements
             $(this).parent().addClass('active');
-            $('#filterProtocols').find('input[value!="any"]').each(function () {
+            $filter.find('input[value!="any"]').each(function () {
                 $(this).prop('checked', false).parent().removeClass('active');
             });
         } else {
             // uncheck 'any' input element
-            $('#filterProtocols').find('input[value="any"]').prop('checked', false).parent().removeClass('active');
+            $filter.find('input[value="any"]').prop('checked', false).parent().removeClass('active');
+        }
+
+        // prevent having none checked - select 'any' as fallback
+        if ($filter.find('input:checked').length === 0) {
+            $filter.find('input[value="any"]').prop('checked', true).parent().addClass('active');
         }
         updateGraph();
     });
@@ -875,7 +886,6 @@ $(document).ready(function() {
     /**
      * block not available options on "bi-direction" checked
      */
-
     $(document).on('change', '#filterAggregationGlobal input[name=bidirectional]', function() {
         var $filterAggregation = $('#filterAggregation');
 

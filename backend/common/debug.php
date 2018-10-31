@@ -1,6 +1,6 @@
 <?php
 
-namespace common;
+namespace nfsen_ng\common;
 
 class Debug {
     private $stopwatch;
@@ -30,7 +30,7 @@ class Debug {
         if (Config::$cfg['log']['priority'] >= $priority) {
             syslog($priority, 'nfsen-ng: ' . $message);
 
-            if ($this->cli === true && $this->debug === true) echo $message . PHP_EOL;
+            if ($this->cli === true && $this->debug === true) echo date('Y-m-d H:i:s') . ' ' . $message . PHP_EOL;
         }
     }
 

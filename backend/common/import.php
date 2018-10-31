@@ -1,5 +1,5 @@
 <?php
-namespace common;
+namespace nfsen_ng\common;
 
 class Import {
 
@@ -10,7 +10,7 @@ class Import {
     private $quiet;
     private $processPorts;
     private $processPortsBySource;
-    private $skipSources;
+    private $checkLastUpdate;
 
     private $days_total = 0;
 
@@ -22,14 +22,17 @@ class Import {
         $this->quiet = false;
         $this->processPorts = false;
         $this->processPortsBySource = false;
-        $this->skipSources = false;
+        $this->checkLastUpdate = false;
         $this->d->setDebug($this->verbose);
 	}
-
+	
+	/**
+	 * @param \DateTime $datestart
+	 * @throws \Exception
+	 */
 	function start(\DateTime $datestart) {
 
         $sources = Config::$cfg['general']['sources'];
-        $ports = Config::$cfg['general']['ports'];
         $processed_sources = 0;
 
         // if in force mode, reset existing data
@@ -44,26 +47,21 @@ class Import {
             echo PHP_EOL . \vendor\ProgressBar::start($this->days_total, 'Processing ' . count($sources) . ' sources...');
 
         // process each source, e.g. gateway, mailserver, etc.
-        foreach ($sources as $source) {
+        foreach ($sources as $nr => $source) {
             $source_path = Config::$cfg['nfdump']['profiles-data'] . DIRECTORY_SEPARATOR . Config::$cfg['nfdump']['profile'];
             if (!file_exists($source_path)) throw new \Exception("Could not read nfdump profile directory " . $source_path);
             if ($this->cli === true && $this->quiet === false)
-                echo PHP_EOL . "Processing source " . $source . "..." . PHP_EOL;
+                echo PHP_EOL . "Processing source " . $source . " (" . ($nr+1) . "/" . count($sources) . ")..." . PHP_EOL;
 
-            $today = new \DateTime();
             $date = clone $datestart;
 
             // check if we want to continue a stopped import
-
-            if ($this->skipSources === false) $last_update_db = Config::$db->last_update($source);
-            else {
-                if ($this->processPortsBySource === true) $last_update_db = Config::$db->last_update($source, $ports[0]);
-                if ($this->processPorts === true) $last_update_db = Config::$db->last_update('', $ports[0]);
-            }
+			// assumes the last update of a source is similar to the last update of its ports...
+            $last_update_db = Config::$db->last_update($source);
+            
             $last_update = null;
             if ($last_update_db !== false && $last_update_db !== 0) {
-                $last_update = new \DateTime();
-                $last_update->setTimestamp($last_update_db);
+                $last_update = (new \DateTime())->setTimestamp($last_update_db);
             }
 
             if ($this->force === false && isset($last_update)) {
@@ -75,14 +73,15 @@ class Import {
 
                 // set progress to the date when the import was stopped
                 $date->setTimestamp($last_update_db);
+                $date->setTimezone(new \DateTimeZone(date_default_timezone_get()));
             }
 
             // iterate from $datestart until today
-            while ((int)$date->format("Ymd") <= (int)$today->format("Ymd")) {
+            while ((int)$date->format("Ymd") <= (int)(new \DateTime)->format("Ymd")) {
                 $scan = array($source_path, $source, $date->format("Y"), $date->format("m"), $date->format("d"));
                 $scan_path = implode(DIRECTORY_SEPARATOR, $scan);
 
-                // set date to tomorrow
+                // set date to tomorrow for next iteration
                 $date->modify("+1 day");
 
                 // if no data exists for current date  (e.g. .../2017/03/03)
@@ -100,7 +99,7 @@ class Import {
                 if ($this->cli === true && $this->quiet === false)
                     echo \vendor\ProgressBar::next(1, 'Scanning ' . $scan_path . "...");
 
-                foreach($scan_files as $file) {
+                foreach ($scan_files as $file) {
                     if (in_array($file, array(".", ".."))) continue;
 
                     // parse date of file name to compare against last_update
@@ -114,11 +113,10 @@ class Import {
                     try {
 
                         // fill source.rrd
-                        if ($this->skipSources === false)
-                            $this->write_sources_data($source, $stats_path);
+						$this->write_source_data($source, $stats_path);
 
-                        // write general port data (not depending on source, so only executed per port)
-                        if ($this->processPorts === true && $source === $sources[0])
+                        // write general port data (queries data for all sources, should only be executed when data for all sources exists...)
+                        if ($this->processPorts === true && $nr === count($sources)-1)
                             $this->write_ports_data($stats_path);
 
                         // if enabled, process ports per source as well (source_80.rrd)
@@ -127,7 +125,7 @@ class Import {
                         }
 
                     } catch (\Exception $e) {
-                        $this->d->log('Catched exception: ' . $e->getMessage(), LOG_WARNING);
+                        $this->d->log('Caught exception: ' . $e->getMessage(), LOG_WARNING);
                     }
                 }
             }
@@ -138,19 +136,23 @@ class Import {
             echo \vendor\ProgressBar::finish();
 
     }
-
-    /**
-     * @param $source
-     * @param $stats_path
-     * @return bool
-     */
-    private function write_sources_data($source, $stats_path) {
+	
+	/**
+	 * @param $source
+	 * @param $stats_path
+	 * @return bool
+	 * @throws \Exception
+	 */
+    private function write_source_data($source, $stats_path) {
+    	
         // set options and get netflow summary statistics (-I)
         $nfdump = NfDump::getInstance();
         $nfdump->reset();
         $nfdump->setOption("-I", null);
-        $nfdump->setOption("-r", $stats_path);
-        $nfdump->setOption("-M", $source);
+		$nfdump->setOption("-M", $source);
+		$nfdump->setOption("-r", $stats_path);
+	
+		if ($this->db_updateable($stats_path, $source) === false) return false;
 
         try {
             $input = $nfdump->execute();
@@ -172,6 +174,7 @@ class Import {
         foreach($input as $i => $line) {
             if (!is_string($line)) $this->d->log('Got no output of previous command', LOG_DEBUG);
             if ($i === 0) continue; // skip nfdump command
+			if (!preg_match('/:/', $line)) continue; // skip invalid lines like error messages
             list($type, $value) = explode(": ", $line);
 
             // we only need flows/packets/bytes values, the source and the timestamp
@@ -181,75 +184,85 @@ class Import {
         }
 
         // write to database
-        Config::$db->write($data);
+		if (Config::$db->write($data) === false) throw new \Exception('Error writing to ' . $stats_path);
     }
-
-    /**
-     * @param $stats_path
-     * @param $source
-     * @return bool
-     */
+	
+	/**
+	 * @param $stats_path
+	 * @param $source
+	 * @return bool
+	 * @throws \Exception
+	 */
     private function write_ports_data($stats_path, $source = "") {
-	    $ports = \common\Config::$cfg['general']['ports'];
-	    $sources = \common\Config::$cfg['general']['sources'];
+	    $ports = Config::$cfg['general']['ports'];
 
-	    foreach ($ports as $port) {
-
-            // set options and get netflow statistics
-            $nfdump = NfDump::getInstance();
-            $nfdump->reset();
-            $nfdump->setFilter("dst port=" . $port);
-            $nfdump->setOption("-s", "dstport:p");
-            $nfdump->setOption("-r", $stats_path);
-            $nfdump->setOption("-M", $source);
-
-            // if no source is specified, get data for all sources
-            if (empty($source)) $nfdump->setOption("-M", implode(":", $sources));
-
-            try {
-                $input = $nfdump->execute();
-            } catch (\Exception $e) {
-                $this->d->log('Exception: ' . $e->getMessage(), LOG_WARNING);
-                return false;
-            }
-
-            // parse and turn into usable data
-
-            $date = new \DateTime(substr($stats_path, -12));
-            $data = array(
-                'fields' => array(),
-                'source' => $source,
-                'port' => $port,
-                'date_iso' => $date->format("Ymd\THis"),
-                'date_timestamp' => $date->getTimestamp()
-            );
-            $rows = count($input);
-
-            // process protocols
-            // headers: ts,te,td,pr,val,fl,flP,ipkt,ipktP,ibyt,ibytP,ipps,ipbs,ibpp
-            foreach ($input as $i => $line) {
-                if (count($line) !== 14) continue; // skip anything invalid
-                if ($line[0] === "ts") continue; // skip header
-
-                $proto = strtolower($line[3]);
-                $data['fields']['flows_' . $proto] = (int)$line[5];
-                $data['fields']['packets_' . $proto] = (int)$line[7];
-                $data['fields']['bytes_' . $proto] = (int)$line[9];
-            }
-
-            // process summary
-            // headers: flows,bytes,packets,avg_bps,avg_pps,avg_bpp
-            $lastline = $input[$rows-1];
-            $data['fields']['flows'] = (int)$lastline[0];
-            $data['fields']['packets'] = (int)$lastline[2];
-            $data['fields']['bytes'] = (int)$lastline[1];
-
-            // write to database
-            Config::$db->write($data);
-        }
+	    foreach ($ports as $port) $this->write_port_data($port, $stats_path, $source);
 
         return true;
     }
+    
+    private function write_port_data($port, $stats_path, $source = "") {
+		$sources = Config::$cfg['general']['sources'];
+	
+		// set options and get netflow statistics
+		$nfdump = NfDump::getInstance();
+		$nfdump->reset();
+	
+		if (empty($source)) {
+			// if no source is specified, get data for all sources
+			$nfdump->setOption("-M", implode(":", $sources));
+			if ($this->db_updateable($stats_path, '', $port) === false) return false;
+		} else {
+			$nfdump->setOption("-M", $source);
+			if ($this->db_updateable($stats_path, $source, $port) === false) return false;
+		}
+		
+		$nfdump->setFilter("dst port=" . $port);
+		$nfdump->setOption("-s", "dstport:p");
+		$nfdump->setOption("-r", $stats_path);
+	
+		try {
+			$input = $nfdump->execute();
+		} catch (\Exception $e) {
+			$this->d->log('Exception: ' . $e->getMessage(), LOG_WARNING);
+			return false;
+		}
+	
+		// parse and turn into usable data
+	
+		$date = new \DateTime(substr($stats_path, -12));
+		$data = array(
+			'fields' => array(),
+			'source' => $source,
+			'port' => $port,
+			'date_iso' => $date->format("Ymd\THis"),
+			'date_timestamp' => $date->getTimestamp()
+		);
+		$rows = count($input);
+	
+		// process protocols
+		// headers: ts,te,td,pr,val,fl,flP,ipkt,ipktP,ibyt,ibytP,ipps,ipbs,ibpp
+		foreach ($input as $i => $line) {
+			if (!is_array($line) && $line instanceof \Countable === false) continue; // skip anything uncountable
+			if (count($line) !== 14) continue; // skip anything invalid
+			if ($line[0] === "ts") continue; // skip header
+			
+			$proto = strtolower($line[3]);
+			$data['fields']['flows_' . $proto] = (int)$line[5];
+			$data['fields']['packets_' . $proto] = (int)$line[7];
+			$data['fields']['bytes_' . $proto] = (int)$line[9];
+		}
+	
+		// process summary
+		// headers: flows,bytes,packets,avg_bps,avg_pps,avg_bpp
+		$lastline = $input[$rows-1];
+		$data['fields']['flows'] = (int)$lastline[0];
+		$data['fields']['packets'] = (int)$lastline[2];
+		$data['fields']['bytes'] = (int)$lastline[1];
+	
+		// write to database
+		if (Config::$db->write($data) === false) throw new \Exception('Error writing to ' . $stats_path);
+	}
 
     /**
      * Import a single nfcapd file
@@ -259,9 +272,11 @@ class Import {
      */
     public function import_file(string $file, string $source, bool $last) {
         try {
-
+	
+			$this->d->log('Importing file ' . $file . ' (' . $source . '), last=' . (int)$last, LOG_INFO);
+			
             // fill source.rrd
-            $this->write_sources_data($source, $file);
+            $this->write_source_data($source, $file);
 
             // write general port data (not depending on source, so only executed per port)
             if ($last === true) $this->write_ports_data($file);
@@ -272,8 +287,36 @@ class Import {
             }
 
         } catch (\Exception $e) {
-            $this->d->log('Catched exception: ' . $e->getMessage(), LOG_WARNING);
+			$this->d->log('Caught exception: ' . $e->getMessage(), LOG_WARNING);
         }
+    }
+	
+	/**
+	 * Check if db is free to update (some databases only allow inserting data at the end)
+	 * @param string $file
+	 * @param string $source
+	 * @param int $port
+	 * @return bool
+	 */
+	public function db_updateable(string $file, string $source = '', int $port = 0) {
+		if ($this->checkLastUpdate === false) return true;
+		
+		// parse capture file's datetime. can't use filemtime as we need the datetime in the file name.
+		$date = array();
+		if (!preg_match('/nfcapd\.([0-9]{12})$/', $file, $date)) return false; // nothing to import
+
+        $file_datetime = new \DateTime($date[1]);
+
+        // get last updated time from database
+        $last_update_db = Config::$db->last_update($source, $port);
+        $last_update = null;
+        if ($last_update_db !== false && $last_update_db !== 0) {
+			$last_update = new \DateTime();
+			$last_update->setTimestamp($last_update_db);
+		}
+
+        // prevent attempt to import the same file again
+        return ($file_datetime > $last_update);
     }
 
     /**
@@ -311,12 +354,12 @@ class Import {
     public function setProcessPortsBySource($processPortsBySource) {
         $this->processPortsBySource = $processPortsBySource;
     }
-
-    /**
-     * @param mixed $skipSources
-     */
-    public function setSkipSources($skipSources) {
-        $this->skipSources = $skipSources;
-    }
+	
+	/**
+	 * @param bool $checkLastUpdate
+	 */
+	public function setCheckLastUpdate(bool $checkLastUpdate) {
+		$this->checkLastUpdate = $checkLastUpdate;
+	}
 }
 

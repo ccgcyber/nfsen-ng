@@ -1,5 +1,7 @@
 <?php
-namespace datasources;
+namespace nfsen_ng\datasources;
+
+use nfsen_ng\common\{Debug, Config};
 
 class RRD implements Datasource {
     private $d;
@@ -30,7 +32,7 @@ class RRD implements Datasource {
     );
 
     function __construct() {
-        $this->d = \common\Debug::getInstance();
+        $this->d = Debug::getInstance();
 
         if (!function_exists('rrd_version')) {
             throw new \Exception("Please install the PECL rrd library.");
@@ -56,7 +58,9 @@ class RRD implements Datasource {
      */
     public function last_update(string $source = '', int $port = 0) : int {
         $rrdFile = $this->get_data_path($source, $port);
-        return rrd_last($rrdFile);
+        $last_update = rrd_last($rrdFile);
+        //$this->d->log('Last update of ' . $rrdFile . ': ' . date('d.m.Y H:i', $last_update), LOG_DEBUG);
+        return (int)$last_update;
     }
 
 
@@ -70,6 +74,9 @@ class RRD implements Datasource {
     public function create(string $source, int $port = 0, bool $reset = false) {
         $rrdFile = $this->get_data_path($source, $port);
 
+        // check if folder exists
+		if (!file_exists(dirname($rrdFile))) mkdir(dirname($rrdFile));
+        
         // check if folder has correct access rights
         if (!is_writable(dirname($rrdFile))) {
             $this->d->log('Error creating ' . $rrdFile . ': Not writable', LOG_CRIT);
@@ -98,17 +105,19 @@ class RRD implements Datasource {
 
         return $creator->save();
     }
-
-    /**
-     * Write to an RRD file with supplied data
-     * @param array $data
-     * @return bool
-     */
+	
+	/**
+	 * Write to an RRD file with supplied data
+	 * @param array $data
+	 * @return bool
+	 * @throws \Exception
+	 */
     public function write(array $data) {
         $rrdFile = $this->get_data_path($data['source'], $data['port']);
         if (!file_exists($rrdFile)) $this->create($data['source'], $data['port'], false);
 
         $nearest = (int)$data['date_timestamp'] - ($data['date_timestamp'] % 300);
+		$this->d->log('Writing to file ' . $rrdFile, LOG_DEBUG);
 
         // write data
         $updater = new \RRDUpdater($rrdFile);
@@ -136,8 +145,8 @@ class RRD implements Datasource {
         );
 
         if (empty($protocols)) $protocols = array('tcp', 'udp', 'icmp', 'other');
-        if (empty($sources)) $sources = \common\Config::$cfg['general']['sources'];
-        if (empty($ports)) $ports = \common\Config::$cfg['general']['ports'];
+        if (empty($sources)) $sources = Config::$cfg['general']['sources'];
+        if (empty($ports)) $ports = Config::$cfg['general']['ports'];
 
         switch ($display) {
             case 'protocols':
@@ -207,8 +216,8 @@ class RRD implements Datasource {
      * @return bool
      */
     public function reset(array $sources) {
-        if (empty($sources)) $sources = \Common\Config::$cfg['general']['sources'];
-        $ports = \Common\Config::$cfg['general']['ports'];
+        if (empty($sources)) $sources = Config::$cfg['general']['sources'];
+        $ports = Config::$cfg['general']['ports'];
         $ports[] = 0;
         foreach ($ports as $port) {
             if ($port !== 0) $return = $this->create('', $port, true);
@@ -233,7 +242,7 @@ class RRD implements Datasource {
         else {
             $port = (empty($source)) ? $port : '_' . $port;
         }
-        $path = \common\Config::$path . DIRECTORY_SEPARATOR . 'datasources' . DIRECTORY_SEPARATOR . 'data' . DIRECTORY_SEPARATOR . $source . $port . '.rrd';
+        $path = Config::$path . DIRECTORY_SEPARATOR . 'datasources' . DIRECTORY_SEPARATOR . 'data' . DIRECTORY_SEPARATOR . $source . $port . '.rrd';
 
         if (!file_exists($path)) $this->d->log('Was not able to find ' . $path, LOG_INFO);
 

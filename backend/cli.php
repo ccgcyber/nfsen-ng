@@ -1,10 +1,19 @@
 #!/usr/bin/php
 <?php
-spl_autoload_extensions('.php');
-spl_autoload_register();
+spl_autoload_register(function($class) {
+    $class = strtolower(str_replace('nfsen_ng\\', '', $class));
+    include_once __DIR__ . DIRECTORY_SEPARATOR . str_replace('\\', DIRECTORY_SEPARATOR, $class) . '.php';
+});
 
-\common\Config::initialize();
-$d = \common\Debug::getInstance();
+use nfsen_ng\common\{Debug, Config, Import};
+
+$d = Debug::getInstance();
+try {
+	Config::initialize();
+} catch (Exception $e) {
+    $d->log('Fatal: ' . $e->getMessage(), LOG_ALERT);
+    exit();
+}
 
 if ($argc < 2 || in_array($argv[1], array('--help', '-help', '-h', '-?'))) {
 ?>
@@ -19,7 +28,6 @@ if ($argc < 2 || in_array($argv[1], array('--help', '-help', '-h', '-?'))) {
         -v  Show verbose output
         -p  Import ports data
         -ps Import ports data per source
-        -s  Skip importing sources data
         -f  Force overwriting database and start at the beginning
 
     Commands:
@@ -48,19 +56,22 @@ else {
 
     if (in_array('import', $argv)) {
 
+        // import 3 years of data if available
+        
         $d->log('CLI: Starting import', LOG_INFO);
         $start = new DateTime();
         $start->setDate(date('Y') - 3, date('m'), date('d'));
-        $i = new \common\Import();
+        $i = new Import();
         if (in_array('-v', $argv)) $i->setVerbose(true);
         if (in_array('-p', $argv)) $i->setProcessPorts(true);
         if (in_array('-ps', $argv)) $i->setProcessPortsBySource(true);
-        if (in_array('-s', $argv)) $i->setSkipSources(true);
         if (in_array('-f', $argv)) $i->setForce(true);
         $i->start($start);
 
     } elseif (in_array('start', $argv)) {
-
+        
+        // start the daemon
+        
         $d->log('CLI: Starting daemon...', LOG_INFO);
         $pid = exec('nohup `which php` ' . $folder . '/listen.php > nfsen-ng.log 2>&1 & echo $!', $op, $exit);
         var_dump($exit);
@@ -73,6 +84,9 @@ else {
         echo PHP_EOL;
 
     } elseif (in_array('stop', $argv)) {
+        
+        // stop the daemon
+        
         if (!file_exists($pidfile)) {
             echo "Not running" . PHP_EOL;
             exit();
@@ -80,11 +94,14 @@ else {
         $pid = file_get_contents($pidfile);
         $d->log('CLI: Stopping daemon', LOG_INFO);
         exec('kill ' . $pid);
+        unlink($pidfile);
 
         echo "Stopped." . PHP_EOL;
 
     } elseif (in_array('status', $argv)) {
 
+        // print the daemon status
+        
         if (!file_exists($pidfile)) {
             echo "Not running" . PHP_EOL;
             exit();
@@ -92,7 +109,7 @@ else {
         $pid = file_get_contents($pidfile);
         exec('ps -p ' . $pid, $op);
         if (!isset($op[1])) echo "Not running" . PHP_EOL;
-        else echo 'Running: ' . $pid;
+        else echo 'Running: ' . $pid . PHP_EOL;
 
     }
 }
