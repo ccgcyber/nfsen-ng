@@ -28,9 +28,11 @@ nfsen-ng is an in-place replacement for the ageing nfsen.
 
 Ubuntu 18.04 LTS:
  
- ```sh
+ ```bash
+ # enable universe repository
+ add-apt-repository universe && sudo apt update
  # install packages
- apt-get install apache2 php7.2 php7.2-dev libapache2-mod-php7.2 pkg-config nfdump rrdtool librrd-dev
+ apt install apache2 php7.2 php7.2-dev libapache2-mod-php7.2 pkg-config nfdump rrdtool librrd-dev
  # enable apache modules
  a2enmod rewrite deflate headers expires
  # install rrd library for php
@@ -51,10 +53,40 @@ Ubuntu 18.04 LTS:
  # next step: configuration
  ```
  
- Fedora/CentOS: (TBD)
+ CentOS 7:
 
+ ```bash
+ # update packages
+ yum update
+ # enable EPEL repo
+ yum -y install epel-release
+ # install yum utils
+ yum install yum-utils
+ # install remi release
+ yum install http://rpms.remirepo.net/enterprise/remi-release-7.rpm
+ # enable the repository for PHP 7.2
+ yum-config-manager --enable remi-php72
+ # install packages
+ yum install git httpd mod_php nfdump php72 php72-php-devel php-devel php-pear php-pecl-rrd rrdtool rrdtool-devel
+ # configure virtual host to read .htaccess files
+ vim /etc/httpd/conf/httpd.conf # set AllowOverride All for /var/www/html
+ # start httpd service
+ systemctl start httpd
+ # enable httpd service
+ systemctl enable httpd
+ # install nfsen-ng
+ cd /var/www/html # or wherever
+ git clone https://github.com/mbolli/nfsen-ng
+ chown -R apache:apache .
+ chmod +x nfsen-ng/backend/cli.php
+ # next step: configuration
+ ```
+ 
 ## Configuration
-The default settings file is `backend/settings/settings.php.dist`. Copy it to `backend/settings/settings.php` and start modifying it:
+
+> *Note:* nfsen-ng expects the profiles-data folder structure to be `PROFILES_DATA_PATH/PROFILE/SOURCE/YYYY/MM/DD/nfcapd.YYYYMMDDHHII`, e.g. `/var/nfdump/profiles_data/live/source1/2018/12/01/nfcapd.201812010225`.
+
+The default settings file is `backend/settings/settings.php.dist`. Copy it to `backend/settings/settings.php` and start modifying it. Example values are in *italic*:
 
  * **general**
     * **ports:** (_array(80, 23, 22, ...)_) The ports to examine. _Note:_ If you use RRD as datasource and want to import existing data, you might keep the number of ports to a minimum, or the import time will be measured in moon cycles...
@@ -78,7 +110,9 @@ The command line interface is used to initially scan existing nfcapd.* files, or
 Usage: 
   
   `./cli.php [ options ] import`
-or  
+  
+or for the daemon
+
   `./cli.php start|stop|status`
 
 
@@ -307,3 +341,4 @@ The API is used by the frontend to retrieve data.
 
 More endpoints to come:
 * `/api/graph_stats`
+
