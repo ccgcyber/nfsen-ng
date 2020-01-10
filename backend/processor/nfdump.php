@@ -1,12 +1,14 @@
 <?php
 
-namespace nfsen_ng\common;
+namespace nfsen_ng\processor;
 
-class NfDump {
+use nfsen_ng\common\{Debug, Config};
+
+class NfDump implements Processor {
     private $cfg = array(
         'env' => array(),
         'option' => array(),
-        'format' => 'auto',
+        'format' => 'line',
         'filter' => array()
     );
     private $clean = array();
@@ -111,6 +113,9 @@ class NfDump {
             return $output; // return output if it is a flows/packets/bytes dump
         }
         
+        // remove the 3 summary lines at the end of the csv output
+        $output = array_slice($output, 0, -3);
+
         // slice csv (only return the fields actually wanted)
         $fields_active = array();
         $parsed_header = false;
@@ -231,7 +236,6 @@ class NfDump {
         switch ($format) {
             // nfdump format: %ts %td %pr %sap %dap %pkt %byt %fl
             // csv output: ts,te,td,sa,da,sp,dp,pr,flg,fwd,stos,ipkt,ibyt,opkt,obyt,in,out,sas,das,smk,dmk,dtos,dir,nh,nhb,svln,dvln,ismc,odmc,idmc,osmc,mpls1,mpls2,mpls3,mpls4,mpls5,mpls6,mpls7,mpls8,mpls9,mpls10,cl,sl,al,ra,eng,exid,tr
-            case 'auto':
             case 'line':
                 return array('ts', 'td', 'pr', 'sa', 'sp', 'da', 'dp', 'ipkt', 'ibyt', 'fl');
                 // nfdump format: %ts %td %pr %sap %dap %flg %tos %pkt %byt %fl
