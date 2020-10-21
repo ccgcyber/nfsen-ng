@@ -12,7 +12,8 @@ var config,
     api_graph_options,
     api_flows_options,
     api_statistics_options,
-    nfdump_translation = {ff: 'flow record flags in hex', ts: 'Start Time - first seen', te: 'End Time - last seen', tr: 'Time the flow was received by the collector', td: 'Duration', pr: 'Protocol', exp: 'Exporter ID', eng: 'Engine Type/ID', sa: 'Source Address', da: 'Destination Address', sap: 'Source Address:Port', dap: 'Destination Address:Port', sp: 'Source Port', dp: 'Destination Port', sn: 'Source Network (mask applied)', dn: 'Destination Network (mask applied)', nh: 'Next-hop IP Address', nhb: 'BGP Next-hop IP Address', ra: 'Router IP Address', sas: 'Source AS', das: 'Destination AS', nas: 'Next AS', pas: 'Previous AS', in: 'Input Interface num', out: 'Output Interface num', pkt: 'Packets - default input', ipkt: 'Input Packets', opkt: 'Output Packets', byt: 'Bytes - default input', ibyt: 'Input Bytes', obyt: 'Output Bytes', fl: 'Flows', flg: 'TCP Flags', tos: 'Tos - default src', stos: 'Src Tos', dtos: 'Dst Tos', dir: 'Direction: ingress, egress', smk: 'Src mask', dmk: 'Dst mask', fwd: 'Forwarding Status', svln: 'Src vlan label', dvln: 'Dst vlan label', ismc: 'Input Src Mac Addr', odmc: 'Output Dst Mac Addr', idmc: 'Input Dst Mac Addr', osmc: 'Output Src Mac Addr', pps: 'Packets per second', bps: 'Bytes per second', bpp: 'Bytes per packet', flP: 'Flows (%)', ipktP: 'Input Packets (%)', opktP: 'Output Packets (%)', ibytP: 'Input Bytes (%)', obytP: 'Output Bytes (%)', ipps: 'Input Packets/s', ibps: 'Input Bytes/s', ibpp: 'Input Bytes/Packet'};
+    nfdump_translation = {ff: 'flow record flags in hex', ts: 'Start Time - first seen', te: 'End Time - last seen', tr: 'Time the flow was received by the collector', td: 'Duration', pr: 'Protocol', exp: 'Exporter ID', eng: 'Engine Type/ID', sa: 'Source Address', da: 'Destination Address', sap: 'Source Address:Port', dap: 'Destination Address:Port', sp: 'Source Port', dp: 'Destination Port', sn: 'Source Network (mask applied)', dn: 'Destination Network (mask applied)', nh: 'Next-hop IP Address', nhb: 'BGP Next-hop IP Address', ra: 'Router IP Address', sas: 'Source AS', das: 'Destination AS', nas: 'Next AS', pas: 'Previous AS', in: 'Input Interface num', out: 'Output Interface num', pkt: 'Packets - default input', ipkt: 'Input Packets', opkt: 'Output Packets', byt: 'Bytes - default input', ibyt: 'Input Bytes', obyt: 'Output Bytes', fl: 'Flows', flg: 'TCP Flags', tos: 'Tos - default src', stos: 'Src Tos', dtos: 'Dst Tos', dir: 'Direction: ingress, egress', smk: 'Src mask', dmk: 'Dst mask', fwd: 'Forwarding Status', svln: 'Src vlan label', dvln: 'Dst vlan label', ismc: 'Input Src Mac Addr', odmc: 'Output Dst Mac Addr', idmc: 'Input Dst Mac Addr', osmc: 'Output Src Mac Addr', pps: 'Packets per second', bps: 'Bytes per second', bpp: 'Bytes per packet', flP: 'Flows (%)', ipktP: 'Input Packets (%)', opktP: 'Output Packets (%)', ibytP: 'Input Bytes (%)', obytP: 'Output Bytes (%)', ipps: 'Input Packets/s', ibps: 'Input Bytes/s', ibpp: 'Input Bytes/Packet', pktP: 'Packets (%)', bytP: 'Bytes (%)'},
+    views_view_status = {graphs: false, flows: false, statistics: false};
 
 $(document).ready(function() {
 
@@ -94,6 +95,12 @@ $(document).ready(function() {
 
         // trigger resize for the graph
         if (typeof dygraph !== 'undefined') dygraph.resize();
+
+        // set defaults for the view
+        init_defaults(view);
+
+        // set view state to true
+        views_view_status[view] = true;
     });
 
     /**
@@ -239,14 +246,23 @@ $(document).ready(function() {
     });
 
     /**
+     * set graph display to curve or step plot
+     */
+    $(document).on('change', '#graph_lineplot input', function() {
+        dygraph.updateOptions({
+            stepPlot: ($(this).val() === 'step')
+        });
+    })
+
+    /**
      * set graph display to lines or stacked
      */
     $(document).on('change', '#graph_linestacked input', function() {
         var stacked = ($(this).val() === 'stacked');
 
         dygraph.updateOptions({
-            stackedGraph : stacked,
-            fillGraph: stacked
+            stackedGraph: ($(this).val() === 'stacked'),
+            fillGraph: ($(this).val() !== 'line')
         });
     });
 
@@ -267,7 +283,7 @@ $(document).ready(function() {
     $(document).on('change', '#statsFilterForSelection', function() {
         var disabled = ($(this).val() !== 'record');
 
-        $('#filterAggregation').find('label, input, select, button').each(function() {
+        $('#filterFlowAggregation').find('label, input, select, button').each(function() {
             $(this).prop('disabled', disabled).toggleClass('disabled', disabled);
         });
 
@@ -328,10 +344,9 @@ $(document).ready(function() {
      * - set the select-list of sources
      * - initialize the range slider
      * - load the graph
+     * - select default view if set in the config
      */
     function init() {
-        // load default view
-        $('header li a').eq(0).trigger('click');
 
         // load values for form
         updateDropdown('sources', config['sources']);
@@ -339,11 +354,88 @@ $(document).ready(function() {
 
         init_rangeslider();
 
+        // load default view
+        if (typeof config.frontend.defaults !== 'undefined') {
+            $('header li a[data-view="' + config.frontend.defaults.view + '"]').trigger('click');
+        } else {
+            $('header li a').eq(0).trigger('click');
+        }
+
         // show graph for one year by default
         $('#date_slot').find('[data-unit="y"]').parent().trigger('click');
+    }
 
-        // show correct form elements
-        $('#filterDisplaySelect').trigger('change');
+    /**
+     * sets default values for the view (graphs, flows, statistics)
+     * hides unneeded controls if e.g. only one source or one port is defined
+     * @param view
+     */
+    function init_defaults(view) {
+        var defaults = {graphs: {}, flows: {}, statistics: {}};
+        if (typeof config.frontend.defaults !== 'undefined') {
+            defaults = config.frontend.defaults;
+        }
+
+        // graphs defaults
+        if (view === 'graphs' && views_view_status.graphs === false) {
+            // graphs: set default display (sources, protocols, ports)
+            if (typeof defaults.graphs.display !== 'undefined') {
+                $('#filterDisplaySelect').val(defaults.graphs.display).trigger('change');
+            } else {
+                $('#filterDisplaySelect').trigger('change');
+            }
+
+            // graphs: set default datatype
+            if (typeof defaults.graphs.datatype !== 'undefined') {
+                $('#filterTypes input[value="' + defaults.graphs.datatype + '"]').trigger('click');
+            }
+
+            // graphs: set default protocols
+            if (typeof defaults.graphs.protocols !== 'undefined') {
+                // multiple possible if on protocols display
+                if (defaults.graphs.display === 'protocols') {
+                    $('#filterProtocolButtons input[value="any"]').trigger('click');
+                    $.each(defaults.graphs.protocols, function (i, proto) {
+                        $('#filterProtocolButtons input[value="' + proto + '"]').trigger('click');
+                    });
+                } else {
+                    $('#filterProtocolButtons input[value="' + defaults.graphs.protocols[0] + '"]').trigger('click');
+                }
+            }
+
+            // graphs: hide unneeded controls
+            if (config['sources'].length === 1) { // only one source defined
+                $('#filterDisplaySelect option[value="sources"]').remove();
+                $('#filterSources').hide();
+            }
+
+            if (config['ports'].length === 0) { // only one port defined
+                $('#filterDisplaySelect option[value="ports"]').remove();
+            }
+
+            if ($('#filterDisplaySelect option').length === 1) { // only one display option left
+                $('#filterDisplay').hide();
+            }
+        }
+
+        // flows defaults
+        if (view === 'flows' && views_view_status.flows === false) {
+
+            // flows: limit
+            if (typeof defaults.flows.limit !== 'undefined') {
+                $('#flowsFilterLimitSelection').val(defaults.flows.limit);
+            }
+        }
+
+        // statistics defaults
+        if (view === 'statistics' && views_view_status.statistics === false) {
+
+            // statistics: order by
+            if (typeof defaults.statistics.orderby !== 'undefined') {
+                $('#statsFilterOrderBySelection').val(defaults.statistics.orderby);
+            }
+        }
+
     }
 
     /**
@@ -480,6 +572,26 @@ $(document).ready(function() {
     }
 
     /**
+     *
+     * @param e The event object for the click
+     * @param x The x value that was clicked (for dates, this is milliseconds since epoch)
+     * @param points The closest points along that date
+     */
+    function dygraph_click(e, x, points) {
+        if (confirm('Zoom in to this data point?')) {
+            date_range.update({
+                from: x,
+                to: x+300000
+            });
+
+            // remove active state of date slot button
+            $('#date_slot').find('label.active').removeClass('active').find('input').prop('checked', false);
+
+            check_daterange_boundaries((x+300)-x);
+        }
+    }
+
+    /**
      * reads options from api_graph_options, performs a request on the API
      * and tries to display the received data in the dygraph.
      */
@@ -585,9 +697,11 @@ $(document).ready(function() {
                         labelsDiv: $('#legend')[0],
                         labelsSeparateLines: true,
                         legend: 'always',
+                        stepPlot: true,
                         showRangeSelector: true,
                         dateWindow: [dygraph_data[0][0], dygraph_data[dygraph_data.length - 1][0]],
                         zoomCallback: dygraph_zoom,
+                        clickCallback: dygraph_click,
                         highlightSeriesOpts: {
                             strokeWidth: 2,
                             strokeBorderWidth: 1,
@@ -687,6 +801,8 @@ $(document).ready(function() {
             sort = '',
             output = {
                 format: $('#filterOutputSelection').val(),
+                custom: $('#customListOutputFormatValue').val(),
+                ipv6: $('#flowsFilterOther input[name="ipv6"]').prop('checked') | 0
             };
 
         // parse form values to generate a proper API request
@@ -727,13 +843,14 @@ $(document).ready(function() {
             title = $('#statsFilterForSelection :selected').text(),
             sort = $('#statsFilterOrderBySelection').val(),
             fmt = $('#filterOutputSelection'),
-            output = {};
+            output = {
+                ipv6: $('#flowsFilterOther input[name="ipv6"]').prop('checked') | 0,
+            };
 
-        if (!fmt.prop('disabled'))
+        if (!fmt.prop('disabled')) {
             output.format = fmt.val();
-
-        // parse form values to generate a proper API request
-        var aggregate = parse_aggregation_fields();
+            output.custom = $('#customListOutputFormatValue').val();
+        }
 
         if (typeof sources === 'string') sources = [sources];
 
@@ -745,7 +862,6 @@ $(document).ready(function() {
             top: top,
             for: s_for + '/' + sort,
             title: title,
-            aggregate: aggregate,
             limit: '',
             output: output
         };
@@ -759,7 +875,7 @@ $(document).ready(function() {
      * @returns string
      */
     function parse_aggregation_fields() {
-        var $aggregation = $('#filterAggregation');
+        var $aggregation = $('#filterFlowAggregation');
         if ($aggregation.find('[name=bidirectional]:checked').length === 0) {
             var validAggregations = ['proto', 'dstport', 'srcport', 'srcip', 'dstip'],
                 aggregate = '';
@@ -823,10 +939,10 @@ $(document).ready(function() {
                         type: 'number',
                         breakpoints: 'xs sm',
                     };
-                if (['ts', 'te'].indexOf(val) !== -1) {
+                if (['ts', 'te', 'tr'].indexOf(val) !== -1) {
                     column['breakpoints'] = '';
                     column['type'] = 'text'; // 'date' needs moment.js library...
-                } else if (['td', 'fl', 'flP', 'ipktP', 'opktP', 'ibytP', 'obytP', 'ipps', 'opps', 'ibps', 'obps', 'ibpp', 'obpp'].indexOf(val) !== -1) {
+                } else if (['sp', 'dp', 'td', 'fl', 'flP', 'ipktP', 'opktP', 'ibytP', 'obytP', 'ipps', 'opps', 'ibps', 'obps', 'ibpp', 'obpp', 'pktP', 'bytP'].indexOf(val) !== -1) {
                     column['type'] = 'number';
                     column['thousandSeparator'] = '\'';
                 } else if (['sa', 'da', 'pr', 'val'].indexOf(val) !== -1) {
@@ -838,8 +954,8 @@ $(document).ready(function() {
                     column['breakpoints'] = 'all';
                     column['type'] = 'text';
                 } else {
-                    column['visible'] = false;
-                    console.log('ignoring', val);
+                    column['breakpoints'] = '';
+                    column['type'] = 'text';
                 }
                 columns.push(column);
             });
@@ -890,13 +1006,13 @@ $(document).ready(function() {
     /**
      * block not available options on "bi-direction" checked
      */
-    $(document).on('change', '#filterAggregationGlobal input[name=bidirectional]', function() {
-        var $filterAggregation = $('#filterAggregation');
+    $(document).on('change', '#filterFlowAggregationGlobal input[name=bidirectional]', function() {
+        var $filterFlowAggregation = $('#filterFlowAggregation');
 
         // if "bi-directional" is checked, block (disable) all other aggregation options
         if ($(this).parent().hasClass('active')) {
 
-            $filterAggregation.find('[data-disable-on="bi-directional"]').each(function() {
+            $filterFlowAggregation.find('[data-disable-on="bi-directional"]').each(function() {
                 $(this).parent().removeClass('active').addClass('disabled');
                 $(this).prop('disabled', true);
                 if ($(this).prop('tagName') === 'SELECT') $(this).prop('selectedIndex', 0);
@@ -905,7 +1021,7 @@ $(document).ready(function() {
 
         } else {
 
-            $filterAggregation.find('[data-disable-on="bi-directional"]').each(function() {
+            $filterFlowAggregation.find('[data-disable-on="bi-directional"]').each(function() {
                 $(this).parent().removeClass('disabled');
                 $(this).prop('disabled', false);
             });
@@ -930,12 +1046,12 @@ $(document).ready(function() {
             case 'srcip4':
             case 'dstip4':
                 $prefixDiv.removeClass('hidden');
-                $prefixDiv.find('input').attr('maxlength', 2).val('');
+                $prefixDiv.find('input').attr('maxlength', 2).val('24');
                 break;
             case 'srcip6':
             case 'dstip6':
                 $prefixDiv.removeClass('hidden');
-                $prefixDiv.find('input').attr('maxlength', 3).val('');
+                $prefixDiv.find('input').attr('maxlength', 3).val('128');
                 break;
         }
     });

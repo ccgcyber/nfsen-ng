@@ -5,29 +5,29 @@ namespace nfsen_ng\processor;
 use nfsen_ng\common\{Debug, Config};
 
 class NfDump implements Processor {
-    private $cfg = array(
-        'env' => array(),
-        'option' => array(),
+    private $cfg = [
+        'env' => [],
+        'option' => [],
         'format' => null,
-        'filter' => array()
-    );
-    private $clean = array();
+        'filter' => []
+    ];
+    private $clean;
     private $d;
     public static $_instance;
-    
+
     function __construct() {
         $this->d = Debug::getInstance();
         $this->clean = $this->cfg;
         $this->reset();
     }
-    
+
     public static function getInstance() {
         if (!(self::$_instance instanceof self)) {
             self::$_instance = new self();
         }
         return self::$_instance;
     }
-    
+
     /**
      * Sets an option's value
      *
@@ -36,14 +36,30 @@ class NfDump implements Processor {
      */
     public function setOption($option, $value) {
         switch ($option) {
-            case '-M':
-                $this->cfg['option'][$option] = $this->cfg['env']['profiles-data'] . DIRECTORY_SEPARATOR . $this->cfg['env']['profile'] . DIRECTORY_SEPARATOR . $value;
-                $this->cfg['env']['sources'] = explode(':', $value);
+            case '-M': // set sources
+
+                // only sources specified in settings allowed
+                $queried_sources = explode(':', $value);
+                foreach ($queried_sources as $s) {
+                    if (!in_array($s, Config::$cfg['general']['sources'])) continue;
+                    $this->cfg['env']['sources'][] = $s;
+                }
+
+                // cancel if no sources remain
+                if (empty($this->cfg['env']['sources'])) break;
+
+                // set sources path
+                $this->cfg['option'][$option] = implode(DIRECTORY_SEPARATOR, [
+                    $this->cfg['env']['profiles-data'],
+                    $this->cfg['env']['profile'],
+                    implode(':', $this->cfg['env']['sources'])
+                ]);
+
                 break;
-            case '-R':
+            case '-R': // set path
                 $this->cfg['option'][$option] = $this->convert_date_to_path($value[0], $value[1]);
                 break;
-            case '-o':
+            case '-o': // set output format
                 $this->cfg['format'] = $value;
                 break;
             default:
@@ -52,7 +68,7 @@ class NfDump implements Processor {
                 break;
         }
     }
-    
+
     /**
      * Sets a filter's value
      *
@@ -61,30 +77,30 @@ class NfDump implements Processor {
     public function setFilter($filter) {
         $this->cfg['filter'] = $filter;
     }
-    
+
     /**
      * Executes the nfdump command, tries to throw an exception based on the return code
      * @return array
      * @throws \Exception
      */
     public function execute() {
-        $output = array();
-        $processes = array();
+        $output = [];
+        $processes = [];
         $return = "";
         $filter = (empty($this->cfg['filter'])) ? "" : " " . escapeshellarg($this->cfg['filter']);
         $command = $this->cfg['env']['bin'] . " " . $this->flatten($this->cfg['option']) . $filter . ' 2>&1';
         $this->d->log('Trying to execute ' . $command, LOG_DEBUG);
-        
+
         // check for already running nfdump processes
         exec('ps -eo user,pid,args | grep -v grep | grep `whoami` | grep "' . $this->cfg['env']['bin'] . '"', $processes);
         if (count($processes) / 2 > intVal(Config::$cfg['nfdump']['max-processes'])) throw new \Exception("There already are " . count($processes) / 2 . " processes of NfDump running!");
-        
+
         // execute nfdump
         exec($command, $output, $return);
-        
+
         // prevent logging the command usage description
-        if (isset($output[0]) && preg_match('/^usage/i', $output[0])) $output = array();
-        
+        if (isset($output[0]) && preg_match('/^usage/i', $output[0])) $output = [];
+
         switch ($return) {
             case 127:
                 throw new \Exception("NfDump: Failed to start process. Is nfdump installed? " . implode(' ', $output));
@@ -99,51 +115,60 @@ class NfDump implements Processor {
                 throw new \Exception("NfDump: Internal error. " . implode(' ', $output));
                 break;
         }
-        
+
         // add command to output
         array_unshift($output, $command);
-        
+
         // if last element contains a colon, it's not a csv - todo better check?
         if (preg_match('/:/', $output[count($output) - 1])) {
             return $output; // return output if it is a flows/packets/bytes dump
         }
-        
+
         // remove the 3 summary lines at the end of the csv output
         $output = array_slice($output, 0, -3);
 
         // slice csv (only return the fields actually wanted)
-        $fields_active = array();
+        $field_ids_active = [];
         $parsed_header = false;
         $format = false;
         if (isset($this->cfg['format']))
             $format = $this->get_output_format($this->cfg['format']);
-        
+
         foreach ($output as $i => &$line) {
-            
+
             if ($i === 0) continue; // skip nfdump command
             $line = str_getcsv($line, ',');
-            
-            if (preg_match('/limit/', $line[0])) continue;
-            if (preg_match('/error/', $line[0])) continue;
+            $temp_line = [];
+
+            if (count($line) === 1 || preg_match('/limit/', $line[0]) || preg_match('/error/', $line[0])) { // probably an error message or warning. add to command
+                $output[0] .= ' <br><b>' . $line[0] . '</b>';
+                unset($output[$i]);
+                continue;
+            }
             if (!is_array($format)) $format = $line; // set first valid line as header if not already defined
-            
+
             foreach ($line as $field_id => $field) {
-                
+
                 // heading has the field identifiers. fill $fields_active with all active fields
                 if ($parsed_header === false) {
-                    if (in_array($field, $format)) $fields_active[] = $field_id;
+                    if (in_array($field, $format)) {
+                        $field_ids_active[array_search($field, $format)] = $field_id;
+                    }
                 }
-                
+
                 // remove field if not in $fields_active
-                if (!in_array($field_id, $fields_active)) unset($line[$field_id]);
+                if (in_array($field_id, $field_ids_active)) {
+                    $temp_line[array_search($field_id, $field_ids_active, true)] = $field;
+                }
             }
-            
+
             $parsed_header = true;
-            $line = array_values($line);
+            ksort($temp_line);
+            $line = array_values($temp_line);
         }
-        return $output;
+        return array_values($output);
     }
-    
+
     /**
      * Concatenates key and value of supplied array
      *
@@ -154,26 +179,30 @@ class NfDump implements Processor {
     private function flatten($array) {
         if (!is_array($array)) return false;
         $output = "";
-        
+
         foreach ($array as $key => $value) {
-            $output .= is_int($key) ?: $key . ' ' . escapeshellarg($value) . ' ';
+            if (is_null($value)) {
+                $output .= $key . ' ';
+            } else {
+                $output .= is_int($key) ?: $key . ' ' . escapeshellarg($value) . ' ';
+            }
         }
         return $output;
     }
-    
+
     /**
      * Reset config
      */
     public function reset() {
-        $this->clean['env'] = array(
+        $this->clean['env'] = [
             'bin' => Config::$cfg['nfdump']['binary'],
             'profiles-data' => Config::$cfg['nfdump']['profiles-data'],
             'profile' => Config::$cfg['nfdump']['profile'],
-            'sources' => array(),
-        );
+            'sources' => [],
+        ];
         $this->cfg = $this->clean;
     }
-    
+
     /**
      * Converts a time range to a nfcapd file range
      * Ensures that files actually exist
@@ -193,36 +222,39 @@ class NfDump implements Processor {
         $filestartexists = false;
         $fileendexists = false;
         $sourcepath = $this->cfg['env']['profiles-data'] . DIRECTORY_SEPARATOR . $this->cfg['env']['profile'] . DIRECTORY_SEPARATOR;
-        
+
         // if start file does not exist, increment by 5 minutes and try again
         while ($filestartexists === false) {
             if ($start >= $end) break;
-            
+
             foreach ($this->cfg['env']['sources'] as $source) {
                 if (file_exists($sourcepath . $source . DIRECTORY_SEPARATOR . $filestart)) $filestartexists = true;
             }
-            
+
             $pathstart = $start->format('Y/m/d') . DIRECTORY_SEPARATOR;
             $filestart = $pathstart . 'nfcapd.' . $start->format('YmdHi');
             $start->add(new \DateInterval('PT5M'));
         }
-        
+
         // if end file does not exist, subtract by 5 minutes and try again
         while ($fileendexists === false) {
-            if ($end == $start) break; // strict comparison won't work
-            
+            if ($end == $start) { // strict comparison won't work
+                $fileend = $filestart;
+                break;
+            }
+
             foreach ($this->cfg['env']['sources'] as $source) {
                 if (file_exists($sourcepath . $source . DIRECTORY_SEPARATOR . $fileend)) $fileendexists = true;
             }
-            
+
             $pathend = $end->format('Y/m/d') . DIRECTORY_SEPARATOR;
             $fileend = $pathend . 'nfcapd.' . $end->format('YmdHi');
             $end->sub(new \DateInterval('PT5M'));
         }
-        
+
         return $filestart . PATH_SEPARATOR . $fileend;
     }
-    
+
     /**
      * @param $format
      *
@@ -234,16 +266,18 @@ class NfDump implements Processor {
             // nfdump format: %ts %td %pr %sap %dap %pkt %byt %fl
             // csv output: ts,te,td,sa,da,sp,dp,pr,flg,fwd,stos,ipkt,ibyt,opkt,obyt,in,out,sas,das,smk,dmk,dtos,dir,nh,nhb,svln,dvln,ismc,odmc,idmc,osmc,mpls1,mpls2,mpls3,mpls4,mpls5,mpls6,mpls7,mpls8,mpls9,mpls10,cl,sl,al,ra,eng,exid,tr
             case 'line':
-                return array('ts', 'td', 'pr', 'sa', 'sp', 'da', 'dp', 'ipkt', 'ibyt', 'fl');
+                return ['ts', 'td', 'pr', 'sa', 'sp', 'da', 'dp', 'ipkt', 'ibyt', 'fl'];
                 // nfdump format: %ts %td %pr %sap %dap %flg %tos %pkt %byt %fl
             case 'long':
-                return array('ts', 'td', 'pr', 'sa', 'sp', 'da', 'dp', 'flg', 'stos', 'dtos', 'ipkt', 'ibyt', 'fl');
+                return ['ts', 'td', 'pr', 'sa', 'sp', 'da', 'dp', 'flg', 'stos', 'dtos', 'ipkt', 'ibyt', 'fl'];
                 // nfdump format: %ts %td %pr %sap %dap %pkt %byt %pps %bps %bpp %fl
             case 'extended':
-                return array('ts', 'td', 'pr', 'sa', 'sp', 'da', 'dp', 'ipkt', 'ibyt', 'ibps', 'ipps', 'ibpp');
-            
+                return ['ts', 'td', 'pr', 'sa', 'sp', 'da', 'dp', 'ipkt', 'ibyt', 'ibps', 'ipps', 'ibpp'];
+            case 'full':
+                return ['ts', 'te', 'td', 'sa', 'da', 'sp', 'dp', 'pr', 'flg', 'fwd', 'stos', 'ipkt', 'ibyt', 'opkt', 'obyt', 'in', 'out', 'sas', 'das', 'smk', 'dmk', 'dtos', 'dir', 'nh', 'nhb', 'svln', 'dvln', 'ismc', 'odmc', 'idmc', 'osmc', 'mpls1', 'mpls2', 'mpls3', 'mpls4', 'mpls5', 'mpls6', 'mpls7', 'mpls8', 'mpls9', 'mpls10', 'cl', 'sl', 'al', 'ra', 'eng', 'exid', 'tr'];
+
             default:
-                return $format;
+                return explode(' ', str_replace(['fmt:', '%'], '', $format));
         }
     }
 }
